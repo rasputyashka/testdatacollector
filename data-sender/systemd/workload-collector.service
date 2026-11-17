@@ -1,0 +1,32 @@
+[Unit]
+Description=Workload Collector system metrics agent
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u /usr/lib/workload-collector/workload_collector.py
+DynamicUser=yes
+User=workload-collector
+StateDirectory=workload-collector
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/workload-collector
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=workload-collector
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PATH=/usr/bin:/bin
+NoNewPrivileges=yes
+ProtectSystem=strict
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
