@@ -17,3 +17,10 @@ systemctl daemon-reload
 systemctl enable workload-collector.service
 systemctl restart workload-collector.service
 echo "Installed. Logs: journalctl -u workload-collector.service -f"
+CONFIG_FILE="/usr/lib/workload-collector/config.toml"
+if [ ! -f "$CONFIG_FILE" ]; then
+    install -m 0644 "$SOURCE_DIR/config.toml" "$CONFIG_FILE"
+    echo "Configuration file installed"
+else
+    echo "Existing configuration preserved"
+fi

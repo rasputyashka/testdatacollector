@@ -22,7 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-
+import tomllib
 
 # Temporary hardcoded configuration. Replace load_settings() with the TOML parser.
 COLLECTOR_URL = "http://127.0.0.1:8080/api/v1/reports"
@@ -32,6 +32,7 @@ STATE_DIRECTORY = Path("/var/lib/workload-collector")
 MOUNTPOINTS = ("/",)
 AGENT_VERSION = "0.1.0"
 LOG = logging.getLogger("workload-collector")
+CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
 
 
 @dataclass(frozen=True)
@@ -44,14 +45,47 @@ class Settings:
 
 
 def load_settings():
-    """Integration point for the future /etc/workload-collector/config.toml parser."""
-    settings = Settings()
+    """Load and validate settings from TOML configuration."""
+    if not CONFIG_PATH.exists():
+        raise FileNotFoundError(f"Configuration file not found: {CONFIG_PATH}")
+    with CONFIG_PATH.open("rb") as config_file:
+        config = tomllib.load(config_file)
+    collector = config.get("collector", {})
+    agent = config.get("agent", {})
+    settings = Settings(
+        collector_url=collector.get("url", COLLECTOR_URL),
+        interval_seconds=collector.get("interval_seconds", INTERVAL_SECONDS),
+        http_timeout_seconds=collector.get(
+            "http_timeout_seconds", HTTP_TIMEOUT_SECONDS
+        ),
+        state_directory=Path(agent.get("state_directory", STATE_DIRECTORY)),
+        mountpoints=tuple(
+            agent.get("mountpoints", MOUNTPOINTS)
+        ),
+    )
     parsed = urllib.parse.urlsplit(settings.collector_url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ValueError("collector_url must be an absolute HTTP(S) URL")
-    for value in (settings.interval_seconds, settings.http_timeout_seconds):
-        if not math.isfinite(value) or value <= 0:
-            raise ValueError("interval and HTTP timeout must be finite and positive")
+        raise ValueError("Invalid collector URL")
+    for value in (
+        settings.interval_seconds,
+        settings.http_timeout_seconds,
+    ):
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(
+                "Interval and HTTP timeout must be positive numbers"
+            )
+    if not settings.mountpoints:
+        raise ValueError("At least one mountpoint must be configured")
+    if not all(
+        isinstance(path, str) and path.startswith("/")
+        for path in settings.mountpoints
+    ):
+        raise ValueError("Mountpoints must be absolute paths")
     return settings
 
 
