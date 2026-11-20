@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+unit=workload-collector.service
+case "$1" in
+    configure|abort-upgrade|abort-deconfigure|abort-remove)
+        # Match Debian helper semantics: preserve administrator enablement.
+        deb-systemd-helper unmask "$unit" >/dev/null || true
+        if deb-systemd-helper --quiet was-enabled "$unit"; then
+            deb-systemd-helper enable "$unit" >/dev/null || true
+        else
+            deb-systemd-helper update-state "$unit" >/dev/null || true
+        fi
+        if [ -z "${DPKG_ROOT:-}" ] && [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload || true
+            action=start
+            if [ -n "${2:-}" ]; then action=restart; fi
+            deb-systemd-invoke "$action" "$unit" || true
+        fi
+        ;;
+esac

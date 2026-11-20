@@ -1,0 +1,1 @@
+"""Data Collector receiving service."""

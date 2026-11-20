@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Хосты{% endblock %} · Data Collector</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+  <a class="skip" href="#content">Перейти к содержимому</a>
+  <header class="topbar"><div class="shell topbar-inner">
+    <a class="brand" href="/">Data Collector<span>Приём системных метрик</span></a>
+    <nav aria-label="Главная навигация"><a href="/">Хосты</a><a href="/healthz">Состояние сервера</a></nav>
+  </div></header>
+  <main id="content" class="shell">{% block content %}{% endblock %}</main>
+  <footer class="shell footer">Локальный журнал телеметрии. Время указано в UTC. Обновление вручную.</footer>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="page-heading"><div><h1>Хосты</h1><p>Последние метрики каждого отправителя и время связи.</p></div><a class="button secondary" href="{{ request.url }}">Обновить</a></div>
+<form class="search" action="/" method="get"><label for="q">Найти хост</label><div class="search-controls"><input id="q" name="q" value="{{ q }}" placeholder="Имя хоста или UUID" maxlength="256"><button type="submit">Найти</button>{% if q %}<a href="/">Сбросить</a>{% endif %}</div></form>
+<div class="section-heading"><h2>{% if q %}Результаты поиска{% else %}Отправители{% endif %}</h2><span>Найдено: {{ total }}</span></div>
+{% if records %}
+<div class="table-wrap"><table><caption class="sr-only">Последние отчёты хостов</caption><thead><tr><th>Хост</th><th>Среда</th><th>CPU</th><th>RAM</th><th>Последняя связь</th><th>Состояние</th></tr></thead><tbody>
+{% for item in records %}{% set r = item.report %}<tr>
+<td class="host-cell"><a href="/hosts/{{ r.host_id }}">{{ r.hostname }}</a><span class="identity">{{ r.host_id }}</span></td>
+<td>{{ r.env.type }}{% if r.env.tech %}<span class="secondary-text">{{ r.env.tech }}</span>{% endif %}</td>
+<td class="numeric">{{ r.cpu.usage_percent|percent }}</td><td class="numeric">{{ memory_percent(r.memory)|percent }}</td>
+<td class="time">{{ item.last_received_at|timestamp }}</td><td><span class="status {{ 'stale' if item.stale else 'fresh' }}">{{ 'Давно нет отчётов' if item.stale else 'Свежие данные' }}</span></td>
+</tr>{% endfor %}</tbody></table></div>
+<p class="hint">Статус определяется по времени получения: свежие данные — не старше {{ stale_seconds }} секунд. Это не проверка доступности хоста.</p>
+{% else %}
+<section class="empty"><div class="empty-mark" aria-hidden="true">{% if q %}?{% else %}+{% endif %}</div><h2>{{ 'Хосты не найдены' if q else 'Ожидаем первый отчёт' }}</h2>
+{% if q %}<p>Измените имя или UUID в строке поиска.</p><a href="/">Показать все хосты</a>{% else %}<p>Запустите data-sender на этом компьютере. При стандартном запуске на порту 8080 адрес уже совпадает с настройкой агента.</p><pre><code>cd data-sender
+python3 workload_collector.py --config config.toml --state-dir .state</code></pre><p class="hint">Адрес этого приёмника: <code>{{ request.url_for('receive_report') }}</code>. Если порт отличается от 8080, измените COLLECTOR_URL в настройках агента. Первый отчёт появится сразу после сбора.</p>{% endif %}</section>
+{% endif %}
+{% if pages > 1 %}<nav class="pagination" aria-label="Страницы хостов">{% if page > 1 %}<a href="{{ request.url.include_query_params(page=page-1) }}">Назад</a>{% endif %}<span>Страница {{ page }} из {{ pages }}</span>{% if page < pages %}<a href="{{ request.url.include_query_params(page=page+1) }}">Далее</a>{% endif %}</nav>{% endif %}
+{% endblock %}

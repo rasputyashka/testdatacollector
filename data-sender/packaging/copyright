@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: workload-collector
+Source: https://github.com/rasputyashka/testdatacollector
+
+Files: *
+Copyright: 2026 Konstantin Rasputin
+License: unspecified
+ No redistribution license has been declared by the upstream author.
+ Prepared for the repository owner's own use; no license grant is implied.
+ Resolve licensing before distributing this package to third parties.

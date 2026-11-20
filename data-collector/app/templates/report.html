@@ -1,0 +1,7 @@
+{% extends 'base.html' %}
+{% block title %}Отчёт {{ record.id }}{% endblock %}
+{% block content %}
+<a class="back" href="/hosts/{{ record.host_id }}">К хосту {{ record.report.hostname }}</a>
+<div class="page-heading"><div><h1>Отчёт {{ record.id }}</h1><p>Собран {{ record.collected_at|timestamp }}. Получен {{ record.received_at|timestamp }}.</p></div><a class="button secondary" href="/api/v1/reports/{{ record.id }}">Открыть JSON</a></div>
+<pre class="json"><code>{{ payload }}</code></pre>
+{% endblock %}

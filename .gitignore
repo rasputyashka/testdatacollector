@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.ci-venv/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+data-collector/data/
+data-sender/.state/
+# Debian build output
+/dist/
+*.deb
+*.buildinfo
+*.changes
+*.dsc
+*.tar.xz
+data-sender/debian/.debhelper/
+data-sender/debian/workload-collector/
+data-sender/debian/files
+data-sender/debian/*.debhelper
+data-sender/debian/*.substvars
+
+.claude

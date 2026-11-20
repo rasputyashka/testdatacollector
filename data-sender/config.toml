@@ -1,0 +1,9 @@
+# Installed as /etc/data-collector/config.toml; restart the service after editing.
+[collector]
+url = "http://127.0.0.1:8080/api/v1/reports"
+interval_seconds = 60
+http_timeout_seconds = 10
+
+[agent]
+state_directory = "/var/lib/workload-collector"
+mountpoints = ["/"]

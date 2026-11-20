@@ -1,77 +1,165 @@
 # Workload Collector
 
-Демон для Linux: собирает системные метрики и отправляет JSON коллектору по HTTP.
-Python **3.9+**, только стандартная библиотека: устанавливать пакеты через pip не нужно.
-Основная цель — Debian/Ubuntu с systemd. Сборка `.deb` и TOML-парсер в эту версию не входят.
+Отправитель системных метрик Linux, **Python 3.11+**, только стандартная библиотека.
+Пакет `workload-collector` для Debian 12+ / Ubuntu 24.04+ с systemd, архитектура `all`.
+Приёмник FastAPI — [data-collector](../data-collector/README.md); он не входит в пакет отправителя.
 
-## Настройки пока в коде
+## Bash CI
 
-В начале `workload_collector.py`:
+Скрипт находится в [`data-sender/ci.sh`](ci.sh). Команды ниже запускаются из корня репозитория. Makefile и Docker не нужны.
 
-```python
-COLLECTOR_URL = "http://127.0.0.1:8080/api/v1/reports"
-INTERVAL_SECONDS = 60
-HTTP_TIMEOUT_SECONDS = 10
-STATE_DIRECTORY = Path("/var/lib/workload-collector")
-MOUNTPOINTS = ("/",)
-```
-
-`127.0.0.1` — временный адрес коллектора на той же машине. Для отдельного сервера
-замените адрес и при необходимости порт/путь. Коллектор должен принимать
-`POST /api/v1/reports` с `Content-Type: application/json` и возвращать HTTP 2xx.
-Поддерживаются HTTP и HTTPS; для HTTPS проверяется сертификат стандартными средствами Python.
-Аутентификация пока не реализована. Перенаправления HTTP не выполняются.
-
-Для нескольких файловых систем: `MOUNTPOINTS = ("/", "/home")`.
-Указывать именно точки монтирования, а не произвольные папки одной файловой системы.
-
-Будущий парсер подключается в **`load_settings()`**: он должен вернуть `Settings`.
-Остальной код получает этот объект и не зависит от способа чтения настроек.
-Предполагаемый путь конфига — `/etc/workload-collector/config.toml`; сейчас файл не читается.
-
-## Установка и управление
-
-Сначала задайте настоящий адрес коллектора в исходнике. Из папки проекта:
+### Локальная проверка (включая Arch)
 
 ```bash
-sudo sh install.sh
-systemctl status workload-collector.service
-journalctl -u workload-collector.service -f
+bash data-sender/ci.sh test
 ```
 
-Скрипт копирует программу в `/usr/lib/workload-collector/`, юнит — в
-`/etc/systemd/system/`, включает автозапуск и запускает/перезапускает службу.
-После изменения исходника запустите установщик снова.
+Скрипт компилирует исходники и тесты в байткод, запускает `unittest` отправителя и `pytest` приёмника, включая отправку отчёта по локальному HTTP и проверку записи в SQLite. Нужен Python 3.11+ с `venv`: по умолчанию зависимости тестов скачиваются в `data-collector/.ci-venv`. Если они уже установлены в `data-collector/.venv`, можно обойтись без скачивания:
 
 ```bash
-sudo systemctl stop workload-collector
-sudo systemctl start workload-collector
+CI_TEST_PYTHON=./data-collector/.venv/bin/python bash data-sender/ci.sh test
+```
+
+`test` не обновляет Git и не устанавливает системный пакет.
+
+### Сборка и установка (Debian 12+ / Ubuntu 24.04+)
+
+Подготовьте зависимости на целевой машине:
+
+```bash
+sudo apt-get install git python3 python3-venv dpkg
+```
+
+Для сборки `.deb` из текущих файлов без обновления Git и установки:
+
+```bash
+bash data-sender/ci.sh build
+```
+
+Пакет создаётся в `dist/` (например, `dist/workload-collector_0.1.0_all.deb`); версия берётся из [DEBIAN/control](packaging/DEBIAN/control).
+
+Для полного цикла запустите скрипт из чистого клона, в котором `data-sender/ci.sh` уже есть, а текущая ветка отслеживает ветку Git-сервера:
+
+```bash
+bash data-sender/ci.sh full
+```
+
+`full` загружает отслеживаемую ветку, обновляет её только fast-forward, запускает компиляцию и тесты, собирает `.deb` и устанавливает его через `apt-get` (с `sudo`, если скрипт запущен не от root). При локальных изменениях, опережении или расхождении веток скрипт останавливается. Для Git нужны уже настроенные права на чтение репозитория. Пакет устанавливает только отправитель; [приёмник запускается отдельно](../data-collector/README.md#запуск).
+
+Лицензия upstream пока не объявлена: пакет предназначен для собственного использования;
+перед распространением третьим лицам необходимо определить лицензию.
+
+## Установка готового пакета
+
+Из корня репозитория (укажите версию своего пакета):
+
+```bash
+sudo apt install ./dist/workload-collector_0.1.0_all.deb
+```
+
+Скрипты пакета через системные хелперы Debian настраивают автозапуск, запускают службу, при обновлении перезапускают её, при удалении останавливают. Они учитывают системную политику запуска и сохраняют явно отключённый автозапуск. После установки на машине с systemd проверьте статус службы. В контейнере без запущенного systemd пакет устанавливается без запуска службы.
+
+- Код: `/usr/lib/workload-collector/workload_collector.py`.
+- Vendor-unit: `/lib/systemd/system/workload-collector.service` на Debian 12
+  (на merged-/usr это тот же системный каталог через ссылку).
+- **Конфиг: `/etc/data-collector/config.toml`**, dpkg conffile.
+- UUID: `/var/lib/workload-collector/host_id`.
+
+## Конфигурация
+
+Пример поставляется в [config.toml](config.toml):
+
+```toml
+[collector]
+url = "http://127.0.0.1:8080/api/v1/reports"
+interval_seconds = 60
+http_timeout_seconds = 10
+
+[agent]
+state_directory = "/var/lib/workload-collector"
+mountpoints = ["/"]
+```
+
+Укажите настоящий URL приёмника в `/etc/data-collector/config.toml`, затем проверьте конфиг:
+
+```bash
+python3 /usr/lib/workload-collector/workload_collector.py --check-config
+```
+
+```bash
 sudo systemctl restart workload-collector
+```
+
+Файл конфигурации обязателен; отсутствующие ключи получают значения по умолчанию.
+Ошибочные типы, TOML, URL и относительные пути вызывают ошибку старта, а не скрытый fallback.
+`mountpoints` — массив точек монтирования, например `["/", "/home"]`, не произвольные папки.
+URL — HTTP(S) без credentials, пробелов и fragment. HTTPS проверяет сертификат;
+HTTP redirects не выполняются, авторизация пока отсутствует.
+
+Конфиг доступен DynamicUser на чтение (root:root, 0644): секреты в него не помещайте.
+`bash data-sender/ci.sh full` сохраняет локально изменённый конфиг (`--force-confold`).
+При ручной установке dpkg может попросить выбрать версию, если изменились и локальный
+файл, и пакетный вариант. Не используйте `--force-confnew`, если нужно сохранить настройки.
+
+Служба работает с `DynamicUser=yes`, `StateDirectory=workload-collector`, без root и capabilities.
+На хосте состояние может быть ссылкой на `/var/lib/private/workload-collector`.
+UUID сохраняется при перезагрузке, обновлении, remove и purge. Не меняйте `state_directory`
+для пакетной службы без согласованного systemd override `StateDirectory`/`WorkingDirectory`:
+`ProtectSystem=strict` не позволяет писать в произвольные каталоги.
+
+## Управление и удаление
+
+```bash
+systemctl status workload-collector
+```
+
+```bash
+journalctl -u workload-collector -f
+```
+
+```bash
 sudo systemctl disable --now workload-collector
 ```
 
-Служба работает без root через `DynamicUser=yes`. systemd создаёт каталог состояния
-и предоставляет службе доступ к `/var/lib/workload-collector`. На хосте он может
-быть ссылкой на `/var/lib/private/workload-collector` — это штатная работа DynamicUser.
-UUID не теряется после остановки службы, смены временного UID или перезагрузки.
-Отдельные sysusers/tmpfiles-файлы не нужны: пользователя и каталог создаёт systemd.
-Таймер `.timer` не нужен: периодический цикл уже находится внутри демона.
-
-При подготовке `.deb` пакетный юнит обычно размещают в `/usr/lib/systemd/system/`,
-а интеграцию со службой поручают debhelper. `install.sh` — ручная установка для проверки,
-не скрипт сопровождения Debian-пакета.
-
-## Проверка без отправки
-
-На Linux можно вывести один отчёт и завершиться без HTTP:
-
 ```bash
-python3 workload_collector.py --print-once --state-dir /tmp/workload-collector-demo
+sudo apt remove workload-collector
 ```
 
-Это отдельное тестовое состояние с собственным UUID. Не запускайте от root
-ручной экземпляр с каталогом состояния работающей службы.
-При первом сборе `cpu.usage_percent` равен `null`: предыдущего замера ещё нет.
+```bash
+sudo apt purge workload-collector
+```
+
+Remove оставляет конфиг и UUID; purge удаляет пакетный конфиг, но **не UUID и состояние**.
+Очистка идентичности — отдельное осознанное действие администратора: новый UUID создаст
+новый хост на приёмнике. Пользовательские systemd overrides не удаляются пакетом.
+
+## Переход с прежнего install.sh
+
+Старый установщик писал unit в `/etc/systemd/system/workload-collector.service`:
+он перекрывает vendor-unit пакета. Перед установкой проверьте и сохраните старый unit
+и `/usr/lib/workload-collector/config.toml`, если он существует. Перенесите настройки
+в новый `/etc/data-collector/config.toml`. Удалите вручную только подтверждённый старый
+installer-unit, сохранив собственные overrides/masks; выполните `systemctl daemon-reload`.
+Пакет намеренно не удаляет произвольные администраторские файлы в `/etc`.
+Каталог состояния не переносите и не очищайте. `install.sh` не используется пакетом.
+
+## Запуск из исходников без установки
+
+Из `data-sender/`, с отдельным UUID и без HTTP:
+
+```bash
+python3 workload_collector.py --config config.toml --print-once --state-dir .state
+```
+
+Для запуска отправки:
+
+```bash
+python3 workload_collector.py --config config.toml --state-dir .state
+```
+
+`--config` явно меняет путь только для этого процесса; по умолчанию всегда используется
+`/etc/data-collector/config.toml`. `--check-config` не создаёт состояние и не отправляет HTTP.
+Не запускайте ручной экземпляр от root с состоянием работающей службы.
 
 ## Поведение демона
 
@@ -96,7 +184,8 @@ python3 workload_collector.py --print-once --state-dir /tmp/workload-collector-d
 
 ## Формат отчёта
 
-Пример — `example-report.json`. `sample_duration_seconds` отсутствует по договорённости.
+Чтобы получить JSON-отчёт без отправки, запустите агент с `--print-once`.
+Поле `sample_duration_seconds` не передаётся.
 
 | Поле | Смысл / источник |
 | --- | --- |
@@ -135,16 +224,11 @@ python3 workload_collector.py --print-once --state-dir /tmp/workload-collector-d
 
 ```bash
 python3 -m unittest discover -s tests -v
-sudo systemd-analyze verify systemd/workload-collector.service
 ```
 
-Проверку юнита выполняйте после установки: `ExecStart` ссылается на установленный файл.
-Тесты используют временные `/proc`-фикстуры и настоящий локальный HTTP-сервер,
-не обращаются к внешнему коллектору и не меняют службы системы.
+Тесты используют временные каталоги и локальный HTTP, не меняют службы хоста.
 
 Справочные материалы:
 - https://docs.kernel.org/filesystems/proc.html
 - https://www.kernel.org/doc/html/latest/networking/statistics.html
-- https://www.man7.org/linux/man-pages/man3/statvfs.3.html
-- https://www.freedesktop.org/software/systemd/man/latest/systemd-detect-virt.html
 - https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html

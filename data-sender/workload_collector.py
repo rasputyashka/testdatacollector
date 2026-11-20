@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linux system metrics agent. Python 3.9+, standard library only."""
+"""Linux system metrics agent. Python 3.11+, standard library only."""
 
 import argparse
 from dataclasses import dataclass, replace
@@ -24,7 +24,7 @@ import urllib.request
 import uuid
 import tomllib
 
-# Temporary hardcoded configuration. Replace load_settings() with the TOML parser.
+# Defaults for optional keys in the required TOML configuration.
 COLLECTOR_URL = "http://127.0.0.1:8080/api/v1/reports"
 INTERVAL_SECONDS = 60
 HTTP_TIMEOUT_SECONDS = 10
@@ -32,7 +32,7 @@ STATE_DIRECTORY = Path("/var/lib/workload-collector")
 MOUNTPOINTS = ("/",)
 AGENT_VERSION = "0.1.0"
 LOG = logging.getLogger("workload-collector")
-CONFIG_PATH = Path(__file__).resolve().parent / "config.toml"
+CONFIG_PATH = Path("/etc/data-collector/config.toml")
 
 
 @dataclass(frozen=True)
@@ -44,32 +44,39 @@ class Settings:
     mountpoints: tuple = MOUNTPOINTS
 
 
-def load_settings():
-    """Load and validate settings from TOML configuration."""
-    if not CONFIG_PATH.exists():
-        raise FileNotFoundError(f"Configuration file not found: {CONFIG_PATH}")
-    with CONFIG_PATH.open("rb") as config_file:
+def load_settings(config_path=None):
+    """Load the required TOML file; reject invalid types before coercion."""
+    path = CONFIG_PATH if config_path is None else Path(config_path)
+    with path.open("rb") as config_file:
         config = tomllib.load(config_file)
     collector = config.get("collector", {})
     agent = config.get("agent", {})
-    settings = Settings(
-        collector_url=collector.get("url", COLLECTOR_URL),
-        interval_seconds=collector.get("interval_seconds", INTERVAL_SECONDS),
-        http_timeout_seconds=collector.get(
-            "http_timeout_seconds", HTTP_TIMEOUT_SECONDS
-        ),
-        state_directory=Path(agent.get("state_directory", STATE_DIRECTORY)),
-        mountpoints=tuple(
-            agent.get("mountpoints", MOUNTPOINTS)
-        ),
-    )
-    parsed = urllib.parse.urlsplit(settings.collector_url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ValueError("Invalid collector URL")
-    for value in (
-        settings.interval_seconds,
-        settings.http_timeout_seconds,
+    if not isinstance(collector, dict) or not isinstance(agent, dict):
+        raise ValueError("collector and agent must be TOML tables")
+    url = collector.get("url", COLLECTOR_URL)
+    if (
+        not isinstance(url, str)
+        or not url
+        or any(c.isspace() or ord(c) < 32 for c in url)
     ):
+        raise ValueError("Collector URL must be an HTTP(S) URL without whitespace")
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        port = parsed.port
+        if (
+            parsed.scheme not in ("http", "https")
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+            or port == 0
+        ):
+            raise ValueError("Invalid collector URL")
+    except ValueError:
+        raise ValueError("Invalid collector URL") from None
+    interval = collector.get("interval_seconds", INTERVAL_SECONDS)
+    timeout = collector.get("http_timeout_seconds", HTTP_TIMEOUT_SECONDS)
+    for value in (interval, timeout):
         if (
             not isinstance(value, (int, float))
             or isinstance(value, bool)
@@ -77,16 +84,29 @@ def load_settings():
             or value <= 0
         ):
             raise ValueError(
-                "Interval and HTTP timeout must be positive numbers"
+                "Interval and HTTP timeout must be positive finite numbers"
             )
-    if not settings.mountpoints:
-        raise ValueError("At least one mountpoint must be configured")
-    if not all(
-        isinstance(path, str) and path.startswith("/")
-        for path in settings.mountpoints
+    state = agent.get("state_directory", str(STATE_DIRECTORY))
+    if not isinstance(state, str) or not state.startswith("/") or "\0" in state:
+        raise ValueError("State directory must be an absolute path string")
+    mounts = agent.get("mountpoints", list(MOUNTPOINTS))
+    if (
+        not isinstance(mounts, list)
+        or not mounts
+        or not all(
+            isinstance(p, str) and p.startswith("/") and "\0" not in p for p in mounts
+        )
     ):
-        raise ValueError("Mountpoints must be absolute paths")
-    return settings
+        raise ValueError(
+            "Mountpoints must be a nonempty array of absolute path strings"
+        )
+    return Settings(
+        collector_url=url,
+        interval_seconds=interval,
+        http_timeout_seconds=timeout,
+        state_directory=Path(state),
+        mountpoints=tuple(mounts),
+    )
 
 
 def load_host_id(state_directory):
@@ -115,8 +135,11 @@ def load_host_id(state_directory):
 def detect_environment():
     try:
         result = subprocess.run(
-            ["systemd-detect-virt"], capture_output=True, text=True,
-            timeout=3, check=False,
+            ["systemd-detect-virt"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
         )
         technology = result.stdout.strip()
         if result.returncode == 1 and technology == "none":
@@ -124,8 +147,11 @@ def detect_environment():
         if result.returncode != 0 or not technology:
             return {"type": "unknown", "tech": None}
         container = subprocess.run(
-            ["systemd-detect-virt", "--container"], capture_output=True,
-            text=True, timeout=3, check=False,
+            ["systemd-detect-virt", "--container"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
         )
         if container.returncode == 0:
             return {"type": "container", "tech": technology}
@@ -202,11 +228,13 @@ def read_network(proc):
         received, sent = int(fields[0]), int(fields[8])
         if received < 0 or sent < 0:
             raise ValueError("Negative interface counter")
-        interfaces.append({
-            "interface": name,
-            "rx_bytes_total": received,
-            "tx_bytes_total": sent,
-        })
+        interfaces.append(
+            {
+                "interface": name,
+                "rx_bytes_total": received,
+                "tx_bytes_total": sent,
+            }
+        )
     return sorted(interfaces, key=lambda item: item["interface"])
 
 
@@ -226,11 +254,13 @@ def read_filesystems(proc, mountpoints):
             if mountpoint not in types:
                 raise ValueError("Configured path is not a mounted filesystem")
             stat = os.statvfs(mountpoint)
-            entry.update({
-                "total_bytes": stat.f_blocks * stat.f_frsize,
-                "used_bytes": (stat.f_blocks - stat.f_bfree) * stat.f_frsize,
-                "available_bytes": stat.f_bavail * stat.f_frsize,
-            })
+            entry.update(
+                {
+                    "total_bytes": stat.f_blocks * stat.f_frsize,
+                    "used_bytes": (stat.f_blocks - stat.f_bfree) * stat.f_frsize,
+                    "available_bytes": stat.f_bavail * stat.f_frsize,
+                }
+            )
         except (OSError, ValueError) as error:
             LOG.warning("Cannot collect filesystem %s: %s", mountpoint, error)
             entry.update(total_bytes=None, used_bytes=None, available_bytes=None)
@@ -251,11 +281,17 @@ class MetricsCollector:
         self.settings = settings
         self.host_id = host_id
         self.proc = proc
-        self.environment = environment if environment is not None else detect_environment()
+        self.environment = (
+            environment if environment is not None else detect_environment()
+        )
         self.previous_cpu = None
 
     def collect(self):
-        collected_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        collected_at = (
+            datetime.now(timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
         current = safely("CPU", lambda: read_cpu(self.proc))
         cpu = {
             "logical_count": current.logical_count if current else None,
@@ -264,12 +300,22 @@ class MetricsCollector:
         # Update on collection, even when HTTP sending later fails.
         self.previous_cpu = current
         memory_swap = safely("memory", lambda: read_memory(self.proc))
-        boot_id = safely("boot ID", lambda: str(uuid.UUID(
-            (self.proc / "sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
-        )))
-        uptime = safely("uptime", lambda: int(float(
-            (self.proc / "uptime").read_text(encoding="ascii").split()[0]
-        )))
+        boot_id = safely(
+            "boot ID",
+            lambda: str(
+                uuid.UUID(
+                    (self.proc / "sys/kernel/random/boot_id")
+                    .read_text(encoding="ascii")
+                    .strip()
+                )
+            ),
+        )
+        uptime = safely(
+            "uptime",
+            lambda: int(
+                float((self.proc / "uptime").read_text(encoding="ascii").split()[0])
+            ),
+        )
         return {
             "schema_version": 1,
             "agent_version": AGENT_VERSION,
@@ -282,7 +328,10 @@ class MetricsCollector:
             "cpu": cpu,
             "memory": memory_swap[0] if memory_swap else None,
             "swap": memory_swap[1] if memory_swap else None,
-            "filesystems": safely("filesystems", lambda: read_filesystems(self.proc, self.settings.mountpoints)),
+            "filesystems": safely(
+                "filesystems",
+                lambda: read_filesystems(self.proc, self.settings.mountpoints),
+            ),
             "network": safely("network", lambda: read_network(self.proc)),
         }
 
@@ -296,8 +345,13 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def send_report(report, settings):
     body = json.dumps(report, ensure_ascii=True, allow_nan=False).encode("utf-8")
     request = urllib.request.Request(
-        settings.collector_url, data=body, method="POST",
-        headers={"Content-Type": "application/json", "User-Agent": "workload-collector/" + AGENT_VERSION},
+        settings.collector_url,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "workload-collector/" + AGENT_VERSION,
+        },
     )
     opener = urllib.request.build_opener(NoRedirect())
     with opener.open(request, timeout=settings.http_timeout_seconds) as response:
@@ -315,7 +369,12 @@ def run_daemon(collector, settings, stop):
         try:
             send_report(report, settings)
             LOG.info("Report delivered")
-        except (OSError, urllib.error.URLError, http.client.HTTPException, RuntimeError) as error:
+        except (
+            OSError,
+            urllib.error.URLError,
+            http.client.HTTPException,
+            RuntimeError,
+        ) as error:
             # No unbounded queue or immediate retries. The next tick sends fresh data.
             LOG.warning("Report delivery failed: %s", error)
         deadline += settings.interval_seconds
@@ -329,14 +388,36 @@ def run_daemon(collector, settings, stop):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--print-once", action="store_true", help="Print one JSON report without sending HTTP")
-    parser.add_argument("--state-dir", type=Path, help="Override state directory for a manual/debug run")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=CONFIG_PATH,
+        help="TOML configuration path (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--check-config",
+        action="store_true",
+        help="Validate configuration without collecting or sending",
+    )
+    parser.add_argument(
+        "--print-once",
+        action="store_true",
+        help="Print one JSON report without sending HTTP",
+    )
+    parser.add_argument(
+        "--state-dir", type=Path, help="Override state directory for a manual/debug run"
+    )
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     if platform.system() != "Linux":
         parser.error("This agent requires Linux (/proc, statvfs and systemd)")
     try:
-        settings = load_settings()
+        settings = load_settings(args.config)
+        if args.check_config:
+            print("Configuration OK")
+            return 0
         if args.state_dir is not None:
             settings = replace(settings, state_directory=args.state_dir)
         host_id = load_host_id(settings.state_directory)
@@ -347,7 +428,9 @@ def main():
         stop = threading.Event()
         for signum in (signal.SIGTERM, signal.SIGINT):
             signal.signal(signum, lambda _signum, _frame: stop.set())
-        LOG.info("Agent started: host_id=%s interval=%ss", host_id, settings.interval_seconds)
+        LOG.info(
+            "Agent started: host_id=%s interval=%ss", host_id, settings.interval_seconds
+        )
         run_daemon(collector, settings, stop)
     except (OSError, ValueError) as error:
         LOG.error("Cannot start agent: %s", error)
