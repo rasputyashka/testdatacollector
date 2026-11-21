@@ -7,10 +7,9 @@ on:
 
 jobs:
   build-deb:
-    runs-on: [self-hosted, vps]
+    runs-on: [self-hosted]
     steps:
       - uses: actions/checkout@v4
-
       - name: Attach checkout to master
         run: |
           git fetch --no-tags origin +refs/heads/master:refs/remotes/origin/master
