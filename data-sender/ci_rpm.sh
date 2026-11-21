@@ -36,15 +36,19 @@ setup_rpmbuild_tree() {
         fail "Spec file not found at $spec_file"
     fi
 
-    # Создаем архив с исходниками (Source0)
-    # Важно: архив должен распаковаться в папку с именем имя-версия
-    local archive_name="workload-collector-0.1.0.tar.gz"
+    # Версию берем из spec-файла, чтобы имя архива (Source0) всегда совпадало
+    local version
+    version=$(awk '/^Version:/{print $2; exit}' "$spec_file")
+    [[ -n $version ]] || fail 'Version tag not found in spec file'
+    local archive_name="workload-collector-$version.tar.gz"
     stage "Creating source archive: $archive_name"
-    
+
     # Переходим в корень, чтобы архив не содержал лишних родительских папок
     # Используем --exclude-vcs, чтобы не тянуть .git
-    tar --exclude-vcs -czf "$rpmbuild_root/SOURCES/$archive_name" \
-        --transform "s,^\./,workload-collector-0.1.0/," .
+    tar --exclude-vcs --exclude='.ci-venv' --exclude='dist' --exclude='__pycache__' \
+        --exclude='.claude' \
+        -czf "$rpmbuild_root/SOURCES/$archive_name" \
+        --transform "s,^\./,workload-collector-$version/," .
 }
 
 # --- Запуск тестов (аналог run_tests) ---
@@ -70,23 +74,32 @@ run_tests() {
 # --- Сборка RPM ---
 build_rpm() {
     stage 'Building RPM package'
-    
+    need rpmbuild
+
     # Очистка предыдущих сборок в BUILDROOT (на случай повторных запусков)
     rm -rf "$rpmbuild_root/BUILD"/*
 
     # Запуск rpmbuild
     # -ba: собрать бинарный и исходный пакеты
     # --clean: очистить BuildRoot после сборки
-    rpmbuild -ba --clean "$rpmbuild_root/SPECS/workload-collector.spec"
-    
+    # --nodeps: python-зависимости тестов из BuildRequires ставятся средствами CI
+    # (dnf/apt), а rpmdb стороннего хоста их не отражает; от реальных проблем
+    # это не защищает — секция %check всё равно упадет на отсутствующих модулях.
+    rpmbuild -ba --clean --nodeps "$rpmbuild_root/SPECS/workload-collector.spec"
+
     # Поиск готового пакета
     local artifact
     artifact=$(find "$rpmbuild_root/RPMS" -name "workload-collector-*.rpm" -type f | head -n1)
-    
+
     if [[ -z "$artifact" ]]; then
         fail "RPM build finished, but package not found in $rpmbuild_root/RPMS"
     fi
-    
+
+    # Кладем артефакт в dist/, как это делает deb-сборка (data-sender/ci.sh)
+    mkdir -p -- "$root/dist"
+    cp -f -- "$artifact" "$root/dist/"
+    artifact="$root/dist/${artifact##*/}"
+
     printf 'Artifact: %s\n' "$artifact"
 }
 

@@ -12,6 +12,11 @@ Requires:       systemd
 Requires:       ca-certificates
 BuildRequires:  python3-devel
 BuildRequires:  python3-pytest
+BuildRequires:  python3-fastapi
+BuildRequires:  python3-pydantic
+BuildRequires:  python3-uvicorn
+BuildRequires:  python3-jinja2
+BuildRequires:  python3-httpx
 BuildRequires:  systemd
 %description
 Collect CPU, memory, filesystem and network metrics and deliver JSON reports
@@ -29,7 +34,8 @@ persistent installation identity and TOML configuration.
 # Это прямой аналог ваших стадий 'unittest' и 'pytest' из ci.sh.
 # Сборка упадет здесь, если тесты не пройдут.
 %{__python3} -m unittest discover -s data-sender/tests -v
-%{__python3} -m pytest -q data-collector
+# pytest должен запускаться из data-collector, чтобы conftest видел пакет app
+(cd data-collector && %{__python3} -m pytest -q)
 
 %install
 # Макрос %make_install не используется, так как это скрипт.
@@ -49,7 +55,7 @@ install -D -m 0644 data-sender/README.md %{buildroot}%{_pkgdocdir}/README.md
 install -D -m 0644 data-sender/packaging/copyright %{buildroot}%{_pkgdocdir}/copyright
 
 %files
-%license data-sender/LICENSE
+%license data-sender/packaging/copyright
 %doc %{_pkgdocdir}/README.md
 %doc %{_pkgdocdir}/copyright
 %{_bindir}/workload-collector

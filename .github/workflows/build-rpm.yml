@@ -1,0 +1,40 @@
+name: Build rpm package
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build-rpm:
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Attach checkout to master
+        run: |
+          git fetch --no-tags origin +refs/heads/master:refs/remotes/origin/master
+          git checkout -B master --track origin/master
+
+      - name: Install rpm build and test dependencies
+        run: |
+          if command -v dnf >/dev/null; then
+            sudo dnf install -y rpm-build python3-pytest python3-fastapi \
+              python3-pydantic python3-uvicorn python3-jinja2 python3-httpx
+          elif command -v apt-get >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y rpm python3-pytest python3-fastapi \
+              python3-pydantic python3-uvicorn python3-jinja2 python3-httpx
+          else
+            echo "No dnf/apt found; install rpmbuild and Python test deps manually" >&2
+            exit 1
+          fi
+
+      - name: Test and build rpm
+        run: bash data-sender/ci_rpm.sh build
+
+      - name: Upload rpm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: workload-collector-rpm
+          path: dist/*.rpm
+          if-no-files-found: error
