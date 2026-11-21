@@ -1,0 +1,26 @@
+name: Build and install deb package
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build-deb:
+    runs-on: [self-hosted]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Attach checkout to master
+        run: |
+          git fetch --no-tags origin +refs/heads/master:refs/remotes/origin/master
+          git checkout -B master --track origin/master
+
+      - name: Test, build and install deb
+        run: bash data-sender/ci.sh full
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: workload-collector-deb
+          path: dist/*.deb
+          if-no-files-found: error
