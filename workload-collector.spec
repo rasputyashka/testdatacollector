@@ -7,10 +7,16 @@ URL:            https://github.com/rasputyashka/testdatacollector
 Source0:        %{name}-%{version}.tar.gz
 BuildArch:      noarch
 
+# Портативность: на сборочном хосте вне полноценного дистрибутивного окружения
+# (rpm на Debian/Ubuntu, минимальная Fedora) макросы _unitdir/_pkgdocdir
+# и скриптлеты %systemd_* могут быть не определены — задаем фолбэки.
+%{!?_unitdir:%global _unitdir /usr/lib/systemd/system}
+%{!?_docdir:%global _docdir %{_datadir}/doc}
+%{!?_pkgdocdir:%global _pkgdocdir %{_docdir}/%{name}}
+
 Requires:       python3 >= 3.11
 Requires:       systemd
 Requires:       ca-certificates
-BuildRequires:  python3-devel
 BuildRequires:  python3-pytest
 BuildRequires:  python3-fastapi
 BuildRequires:  python3-pydantic
@@ -27,15 +33,15 @@ persistent installation identity and TOML configuration.
 %setup -q
 
 %build
-%{__python3} -m compileall -q .
+python3 -m compileall -q .
 
 %check
 # Секция %check выполняется после %build, но до %install.
-# Это прямой аналог ваших стадий 'unittest' и 'pytest' из ci.sh.
+# Это прямой аналог стадий 'unittest' и 'pytest' из ci.sh.
 # Сборка упадет здесь, если тесты не пройдут.
-%{__python3} -m unittest discover -s data-sender/tests -v
+python3 -m unittest discover -s data-sender/tests -v
 # pytest должен запускаться из data-collector, чтобы conftest видел пакет app
-(cd data-collector && %{__python3} -m pytest -q)
+(cd data-collector && python3 -m pytest -q)
 
 %install
 # Макрос %make_install не используется, так как это скрипт.
@@ -63,16 +69,22 @@ install -D -m 0644 data-sender/packaging/copyright %{buildroot}%{_pkgdocdir}/cop
 %config(noreplace) %{_sysconfdir}/data-collector/config.toml
 
 %post
-# Перезагрузка systemd для подхвата нового юнита
-%systemd_post workload-collector.service
+# Скриптлеты дублируют %systemd_post/%systemd_preun/%systemd_postun_with_restart,
+# не полагаясь на systemd-rpm-macros. Юнит включается по пресетам.
+systemctl preset workload-collector.service >/dev/null 2>&1 || :
 
 %preun
-# Остановка и отключение службы перед удалением
-%systemd_preun workload-collector.service
+# При удалении ($1 = 0) останавливаем и отключаем службу
+if [ "$1" = 0 ]; then
+    systemctl disable --now workload-collector.service >/dev/null 2>&1 || :
+fi
 
 %postun
-# Перезагрузка systemd после удаления/обновления
-%systemd_postun_with_restart workload-collector.service
+systemctl daemon-reload >/dev/null 2>&1 || :
+# При обновлении ($1 >= 1) перезапускаем, если служба была активна
+if [ "$1" -ge 1 ]; then
+    systemctl try-restart workload-collector.service >/dev/null 2>&1 || :
+fi
 
 %changelog
 * Sat Nov 21 2026 Konstantin Rasputin <rasputyashka@users.noreply.github.com> - 0.1.0-1
